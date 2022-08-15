@@ -10,8 +10,21 @@ int min(int a, int b) { return (a > b ? b : a); }
 
 bool running = true;
 
-static Window wins[4096];
-static int win_count = 0;
+typedef struct Tree {
+    Window win;
+    struct Tree* left;
+    struct Tree* right;
+    struct Tree* parent;
+} Tree;
+
+typedef struct {
+    Tree* root;
+} Desktop;
+
+#define MAX_DESKTOPS 9
+static Desktop desktops[MAX_DESKTOPS];
+static int cur_desktop_idx = 0;
+static Tree* cur_tree = NULL;
 
 static Display* _display;
 static Window _root;
@@ -25,6 +38,28 @@ static Size df_size;
 static Atom WM_PROTOCOLS, WM_DELETE_WINDOW;
 
 static bool wm_detected = false;
+
+void init_desktops() {
+    if (MAX_DESKTOPS < 1) {
+        printf("Why is MAX_DESKTOPS set to 0?");
+        running = false;
+        return;
+    }
+
+    for (int i = 0; i < MAX_DESKTOPS; i++)
+        desktops[i] = (Desktop){.root = NULL};
+    
+    /*
+    Tree* rt = (Tree*)malloc(sizeof(Tree));
+    rt->left = NULL;
+    rt->right = NULL;
+    rt->win = DefaultRootWindow(_display);
+    desktops[0].root = rt;
+    */
+
+    cur_desktop_idx = 0;
+    cur_tree = desktops[0].root;
+}
 
 void onConfigureRequest(XEvent*);
 void onMapRequest(XEvent*);
@@ -80,9 +115,39 @@ void onMapRequest(XEvent* _e) {
 
     frame(e->window, false);
     XMapWindow(_display, e->window);
-
-	wins[win_count] = e->window;
-    win_count++;
+    
+    Tree* cur_ptr = cur_tree;
+    Tree* new;
+    if (!cur_ptr) { // First tree in desktop
+        Desktop cur_desktop = desktops[cur_desktop_idx];
+        new = (Tree*)malloc(sizeof(Tree));
+        new->parent = NULL;
+        cur_desktop.root = new;
+    } else {
+        while (cur_ptr) {
+            if (cur_ptr->left && cur_ptr->right) {
+                cur_ptr = cur_ptr->left;
+            } else if (cur_ptr->left) {
+                new = (Tree*)malloc(sizeof(Tree));
+                new->parent = cur_ptr;
+                cur_ptr->right = new;
+                break;
+            } else {
+                new = (Tree*)malloc(sizeof(Tree));
+                new->parent = cur_ptr;
+                cur_ptr->left = new;       
+                break;
+            }
+        }
+    }
+    
+    new->left = NULL;
+    new->right = NULL;
+    new->win = e->window;
+    
+    cur_tree = new;
+    XRaiseWindow(_display, new->win);
+    XSetInputFocus(_display, new->win, RevertToPointerRoot, CurrentTime);
 }
 
 void unframe(Window w) {
@@ -94,6 +159,7 @@ void unframe(Window w) {
 void onUnmapNotify(XEvent* _e) {
     XUnmapEvent* e = &_e->xunmap;
 
+    /*
 	for (int i = 0; i < win_count; i++) {
 		if (e->window == wins[i]) {
             printf("Before:\n");
@@ -114,6 +180,7 @@ void onUnmapNotify(XEvent* _e) {
 			break;
 		}
 	}
+    */
 
     if (e->event == _root)
         return;
@@ -135,6 +202,7 @@ void onButtonPress(XEvent* _e) {
     df_size = (Size){.w = w, .h = h};
 
     XRaiseWindow(_display, e->window);
+    XSetInputFocus(_display, e->window, RevertToPointerRoot, CurrentTime);
 }
 
 void onMotionNotify(XEvent* _e) {
@@ -178,6 +246,12 @@ void onKeyPress(XEvent* _e) {
 			}
 		}
     } else if ((e->state & Mod1Mask) && (e->keycode == XKeysymToKeycode(_display, XK_Tab))) {
+        if (!cur_tree) // Empty desktop
+            return;
+
+        Tree* next = (cur_tree->parent ? cur_tree->parent : cur_tree->left);
+
+        /*
 		int next_i = 0;
 		for (int i = 0; i < win_count; i++) {
 			if (e->window == wins[i]) {
@@ -187,9 +261,10 @@ void onKeyPress(XEvent* _e) {
         }
 
         printf("next_i: %lld\n", next_i);
+        */
 
-		XRaiseWindow(_display, wins[next_i]);
-		XSetInputFocus(_display, wins[next_i], RevertToPointerRoot, CurrentTime);
+		XRaiseWindow(_display, next->win);
+		XSetInputFocus(_display, next->win, RevertToPointerRoot, CurrentTime);
 	} else if ((e->state & (Mod1Mask | ShiftMask)) && (e->keycode == XKeysymToKeycode(_display, XK_Q))) {
         running = false;
     }
@@ -254,10 +329,13 @@ int main() {
 
     _root = DefaultRootWindow(_display);
 
-	system("sxhkd &");
+    init_desktops();
+
+	system("sxhkd &"); // TEMP
+
     run();
 
-    system("killall sxhkd");
+    system("killall sxhkd"); // TEMP
     XCloseDisplay(_display);
 	return 0;
 }
